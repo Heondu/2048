@@ -15,15 +15,12 @@ public class GameManager : MonoBehaviour
     [SerializeField] private Block blockPrefab;
 
     [Header("Value")]
-    [SerializeField] private float spawnRatio = 0.8f;
     [SerializeField] private float moveTime = 0.2f;
-    [SerializeField] private int winCondition = 2048;
 
     [Header("Screen UI")]
-    [SerializeField] private GameObject winScreen;
-    [SerializeField] private GameObject loseScreen;
+    [SerializeField] private GameObject gameOverScreen;
 
-    [Header("Manager Component")]
+    [Header("Component")]
     [SerializeField] private ScoreManager scoreManager;
     [SerializeField] private BeatManager beatManager;
 
@@ -36,6 +33,7 @@ public class GameManager : MonoBehaviour
     private GameState state;
     public GameState State => state;
     private int round = 0;
+    private int highestValue = 0;
 
     private Vector2 beginPos;
 
@@ -46,7 +44,7 @@ public class GameManager : MonoBehaviour
         ChangeState(GameState.Generate);
     }
 
-    private void ChangeState(GameState newState)
+    public void ChangeState(GameState newState)
     {
         state = newState;
 
@@ -62,13 +60,9 @@ public class GameManager : MonoBehaviour
                 break;
             case GameState.Moving:
                 break;
-            case GameState.Win:
-                winScreen.SetActive(true);
-                scoreManager.Save();
-                break;
-            case GameState.Lose:
-                loseScreen.SetActive(true);
-                scoreManager.Save();
+            case GameState.GameOver:
+                gameOverScreen.SetActive(true);
+                scoreManager.Show(highestValue);
                 break;
             default:
                 break;
@@ -77,9 +71,8 @@ public class GameManager : MonoBehaviour
 
     private void Update()
     {
-        if (Input.GetKeyDown(KeyCode.R)) SceneManager.LoadScene("Main");
-
         if (state != GameState.WaitingInput) return;
+        if (Time.timeScale == 0) return;
 
 #if (UNITY_EDITOR || UNITY_STANDALONE_WIN)
         if (Input.GetKeyDown(KeyCode.LeftArrow)) MoveTo(Vector2.left);
@@ -145,25 +138,35 @@ public class GameManager : MonoBehaviour
 
         foreach (Node node in freeNodes.Take(amount))
         {
-            SpawnBlock(node, Random.value > spawnRatio ? 4 : 2);
+            int rand = Random.Range(0, 101);
+            if (highestValue <= 16) SpawnBlock(node, rand > 100 ? 4 : 2);
+            else if (highestValue == 32) SpawnBlock(node, rand > 90 ? 4 : 2);
+            else if (highestValue == 64) SpawnBlock(node, rand > 80 ? 4 : 2);
+            else if (highestValue == 128) SpawnBlock(node, rand > 70 ? 4 : 2);
+            else if (highestValue == 256) SpawnBlock(node, rand > 60 ? 4 : 2);
+            else if (highestValue == 512) SpawnBlock(node, rand > 55 ? 4 : 2);
+            else if (highestValue == 1024) SpawnBlock(node, rand > 50 ? 4 : 2);
+            else if (highestValue >= 2048) SpawnBlock(node, rand > 45 ? 4 : 2);
         }
 
         if (freeNodes.Count == 1)
         {
             if (CanMovingBlock() == false)
             {
-                ChangeState(GameState.Lose);
+                ChangeState(GameState.GameOver);
                 return;
             }
         }
 
-        ChangeState(blocks.Any(b => b.Value == winCondition) ? GameState.Win : GameState.WaitingInput);
+        ChangeState(GameState.WaitingInput);
     }
 
     private void SpawnBlock(Node node, int value)
     {
         Block block = Instantiate(blockPrefab, node.Pos, Quaternion.identity);
-        block.Init(GetBlockTypeByValue(value));
+        BlockType blockType = GetBlockTypeByValue(Mathf.Min(4096, value));
+        blockType.value = value;
+        block.Init(blockType);
         block.SetBlock(node);
         blocks.Add(block);
     }
@@ -171,13 +174,6 @@ public class GameManager : MonoBehaviour
     private void MoveTo(Vector2 dir)
     {
         ChangeState(GameState.Moving);
-
-        ScoreType type = beatManager.InactivateBeat();
-        Debug.Log(type);
-        if (type == ScoreType.miss)
-        {
-            SpawnBlocks(1);
-        }
 
         List<Block> orderedBlocks = blocks.OrderBy(b => b.Pos.x).ThenBy(b => b.Pos.y).ToList();
         if (dir == Vector2.right || dir == Vector2.up) orderedBlocks.Reverse();
@@ -209,6 +205,16 @@ public class GameManager : MonoBehaviour
             } while (next != block.Node);
         }
 
+        if (isMove == false || beatManager.InactivateBeat() == false)
+        {
+            beatManager.TakeDamage();
+            scoreManager.ResetCombo();
+        }
+        else
+        {
+            scoreManager.IncreaseCombo();
+        }
+
         Sequence sequence = DOTween.Sequence();
 
         foreach (Block block in orderedBlocks)
@@ -219,13 +225,25 @@ public class GameManager : MonoBehaviour
 
         sequence.OnComplete(() =>
         {
+            int score = scoreManager.Score;
             foreach (Block block in orderedBlocks.Where(b => b.MergingBlock != null))
             {
-                scoreManager.Add(block.Value * 2);
+                if (block.Value * 2 > highestValue)
+                {
+                    highestValue = block.Value * 2;
+                }
+                scoreManager.IncreaseScore();
                 MergeBlocks(block.MergingBlock, block);
             }
+            if (score != scoreManager.Score)
+            {
+                scoreManager.DisplayScore();
+            }
 
-            ChangeState(isMove ? GameState.SpawningBlocks : GameState.WaitingInput);
+            if (state != GameState.GameOver)
+            {
+                ChangeState(isMove ? GameState.SpawningBlocks : GameState.WaitingInput);
+            }
         });
     }
 
@@ -291,6 +309,17 @@ public class GameManager : MonoBehaviour
     {
         return nodes.FirstOrDefault(n => n.Pos == pos);
     }
+
+    public void Restart()
+    {
+        SceneManager.LoadScene("Title");
+        Time.timeScale = 1;
+    }
+
+    public void Quit()
+    {
+        Application.Quit();
+    }
 }
 
 [System.Serializable]
@@ -306,6 +335,5 @@ public enum GameState
     SpawningBlocks,
     WaitingInput,
     Moving,
-    Win,
-    Lose
+    GameOver
 }
